@@ -10,28 +10,39 @@ SESSION_END_LONDON = 12
 SESSION_START_NY = 13
 SESSION_END_NY = 17
 MIN_RANGE_PCT = 0.003
-URL = "https://fapi.binance.com/fapi/v1/klines"
+
+# Using Bybit API to bypass Binance US IP block (451 Error)
+URL = "https://api.bybit.com/v5/market/kline"
 
 def fetch_live_data():
     try:
-        params = {"symbol": SYMBOL, "interval": "1m", "limit": 1500}
+        params = {
+            "category": "linear",
+            "symbol": SYMBOL,
+            "interval": "15", # 15 minutes directly!
+            "limit": 200      # 200 * 15m = 50 hours of data (covers Asian session)
+        }
         r = requests.get(URL, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
-        df = pd.DataFrame(data, columns=[
-            "open_time","open","high","low","close","volume","close_time",
-            "quote_vol","num_trades","taker_buy_base","taker_buy_quote","ignore"
+        
+        if data["retCode"] != 0:
+            print(f"API Error: {data['retMsg']}")
+            return None
+            
+        # Bybit returns klines in descending order. Columns:
+        # [start_time, open, high, low, close, volume, turnover]
+        df = pd.DataFrame(data["result"]["list"], columns=[
+            "open_time","open","high","low","close","volume","turnover"
         ])
-        df["datetime"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+        
+        df["datetime"] = pd.to_datetime(df["open_time"].astype(int), unit="ms", utc=True)
         for c in ["open","high","low","close","volume"]:
             df[c] = pd.to_numeric(df[c])
-        
-        df.set_index("datetime", inplace=True)
-        df_15m = df.resample("15min").agg({
-            "open":"first", "high":"max", "low":"min", "close":"last", "volume":"sum"
-        }).dropna()
-        df_15m.reset_index(inplace=True)
-        return df_15m
+            
+        # Reverse to chronological order (oldest to newest)
+        df = df.iloc[::-1].reset_index(drop=True)
+        return df
     except Exception as e:
         print(f"Error fetching data: {e}")
         return None
